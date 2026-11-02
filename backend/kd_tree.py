@@ -1,6 +1,5 @@
 import numpy as np
 import pandas as pd
-import matplotlib as mt
 import heapq
 from typing import Callable
 
@@ -25,34 +24,36 @@ K-D Tree, Data Structure Realization
 """
 
 class KDNode:
-    def __init__(self, items : pd.DataFrame | None = None, axis : int = 0):
-        self.items : list | None = None
-        if not(items is None):
-            self.items = [list(items.loc[i]) for i in range(len(items))]
+    def __init__(self, point : np.ndarray | None = None, axis : int = 0,
+                 point_class : int | None = None):
+        self.point : np.ndarray | None = point
         self.axis : int = axis
         self.left : KDNode | None = None
-        self.right: KDNode | None = None
+        self.right : KDNode | None = None
+        self.point_class : int | None = point_class
 
 class KDTree:
     def __init__(
         self,
+        func_dist: Callable,
         points: pd.DataFrame | None = None,
         dim: int | None = None,
-        classes: pd.DataFrame | None = None
+        point_classes: list | None = None
     ) -> None:
         if dim is None:
-            dim = len(points.loc[0]) if not(points is None) else 2
-        self.dim = dim
+            dim = len(points.iloc[0]) if not(points is None) else 2
+        self.func_dist: Callable = func_dist
+        self.dim : int = dim
         self.root: KDNode | None = None
         self.size = 0
         if not(points is None):
-            classes = classes if not(classes is None) else pd.DataFrame(index = range(len(points)), columns = ["class"])
-            items = pd.concat([points, classes], axis = 1)
+            point_classes = point_classes if not(point_classes is None) else [None for _ in range(len(points))]
+            items = [(np.array(points.iloc[i]), point_classes[i]) for i in range(len(points))]
             self.root = self._build(items, depth = 0)
             self.size = len(points)
 
     def _build(
-        self, items: pd.DataFrame, depth: int
+        self, items: list, depth: int
     ) -> KDNode | None:
         if len(items) == 0:
             return None
@@ -61,11 +62,12 @@ class KDTree:
         """
         axis - по какому измерению мы сейчас делим 'плоскость'
         """
-        mid = items.iloc[ : , axis].mean()
+        items.sort(key = lambda p : p[0][axis])
+        mid = len(items) // 2
 
-        node = KDNode(items = items, axis = axis)
-        node.left = self._build(items[items.iloc[ : , axis] < mid], depth + 1)
-        node.right = self._build(items[items.iloc[ : , axis] >= mid], depth + 1)
+        node = KDNode(point = items[mid][0], axis = axis, point_class = items[mid][1])
+        node.left = self._build(items[ : mid], depth + 1)
+        node.right = self._build(items[mid :], depth + 1)
         return node
 
     def rebuild(self) -> None:
@@ -77,57 +79,40 @@ class KDTree:
     # ------------------------------------------------------------------
     # Insertion
     # ------------------------------------------------------------------
-    def insert(self, point : np.ndarray) -> None:
+    def insert(self, point: np.ndarray, point_class: int | None = None) -> None:
         self.size += 1
-        point = pd.DataFrame(test_dot.reshape((1, len(point))))
         if self.root is None:
-            self.root = KDNode(items = point, axis=0)
+            self.root = KDNode(point = point, axis = 0, point_class = point_class)
             return
-        self._insert(self.root, point, depth=0, data=data)
+        self._insert(self.root, point, depth = 0, point_class = point_class)
 
-    def _insert(self, node: KDNode, point: Tuple[float, ...], depth: int, data: Any) -> None:
+    def _insert(self, node: KDNode, point: np.ndarray, depth: int, point_class: int | None = None) -> None:
         axis = node.axis
         if point[axis] < node.point[axis]:
             if node.left is None:
-                node.left = KDNode(point=point, axis=(depth + 1) % self.k, data=data)
+                node.left = KDNode(point = point, axis = (depth + 1) % self.dim, point_class = point_class)
             else:
-                self._insert(node.left, point, depth + 1, data)
+                self._insert(node.left, point, depth + 1, point_class)
         else:
             if node.right is None:
-                node.right = KDNode(point=point, axis=(depth + 1) % self.k, data=data)
+                node.right = KDNode(point = point, axis = (depth + 1) % self.dim, point_class = point_class)
             else:
-                self._insert(node.right, point, depth + 1, data)
+                self._insert(node.right, point, depth + 1, point_class)
 
     # ------------------------------------------------------------------
-    # Deletion (Bentley's algorithm)
+    # Deletion
     # ------------------------------------------------------------------
-    def delete(self, point: Point) -> bool:
+    def delete(self, point: np.ndarray) -> bool:
         """Delete a point from the tree. Returns True if a point was
         removed, False if the point was not found."""
-        point = tuple(map(float, point))
         self.root, removed = self._delete(self.root, point, depth=0)
         if removed:
             self.size -= 1
         return removed
 
-    def _find_min(self, node: Optional[KDNode], target_axis: int, depth: int) -> Optional[KDNode]:
-        """Find the node with the minimum coordinate along `target_axis`
-        in the subtree rooted at `node` (used by delete)."""
-        if node is None:
-            return None
-        axis = node.axis
-        if axis == target_axis:
-            if node.left is None:
-                return node
-            return self._find_min(node.left, target_axis, depth + 1)
-        left_min = self._find_min(node.left, target_axis, depth + 1)
-        right_min = self._find_min(node.right, target_axis, depth + 1)
-        candidates = [n for n in (node, left_min, right_min) if n is not None]
-        return min(candidates, key=lambda n: n.point[target_axis])
-
     def _delete(
-        self, node: Optional[KDNode], point: Tuple[float, ...], depth: int
-    ) -> Tuple[Optional[KDNode], bool]:
+        self, node: KDNode, point: np.ndarray, depth: int
+    ) -> tuple:
         if node is None:
             return None, False
 
@@ -154,6 +139,21 @@ class KDTree:
             node.right, removed = self._delete(node.right, point, depth + 1)
         return node, removed
 
+    def _find_min(self, node: KDNode, target_axis: int, depth: int) -> KDNode:
+        """Find the node with the minimum coordinate along `target_axis`
+        in the subtree rooted at `node` (used by delete)."""
+        if node is None:
+            return None
+        axis = node.axis
+        if axis == target_axis:
+            if node.left is None:
+                return node
+            return self._find_min(node.left, target_axis, depth + 1)
+        left_min = self._find_min(node.left, target_axis, depth + 1)
+        right_min = self._find_min(node.right, target_axis, depth + 1)
+        candidates = [n for n in (node, left_min, right_min) if n is not None]
+        return min(candidates, key=lambda n: n.point[target_axis])
+
     # ------------------------------------------------------------------
     # Nearest neighbour (1-NN)
     # ------------------------------------------------------------------
@@ -170,7 +170,7 @@ class KDTree:
     def _nn_search(self, node: Optional[KDNode], target: Tuple[float, ...], best: dict) -> None:
         if node is None:
             return
-        d = _sq_distance(node.point, target)
+        d = self.func_dist(node.point, target)
         if d < best["dist"]:
             best["dist"] = d
             best["node"] = node
@@ -279,25 +279,3 @@ class KDTree:
 
     def all_points(self) -> List[Tuple[Tuple[float, ...], Any]]:
         return [(n.point, n.data) for n in self._inorder_nodes()]
-
-
-
-def k_nn_kd_tree(search_dot : np.ndarray, k : int, parameters : pd.DataFrame,
-                 classes : pd.DataFrame, func_dist : Callable):
-
-    heap_nearest_dots = []
-    dict_cnt_classes_near = {i : 0 for i in range(classes.nunique().iloc[0])}
-
-    for i in range(parameters.shape[0]):
-        cur_dot = np.array(parameters.loc[i])
-        heap_nearest_dots.append((func_dist(search_dot, cur_dot), classes.loc[i].item()))
-
-    heapq.heapify(heap_nearest_dots)
-
-    for _ in range(k):
-        cur_near_dot = heapq.heappop(heap_nearest_dots)
-        dict_cnt_classes_near[cur_near_dot[1]] += 1
-
-    return max(dict_cnt_classes_near, key = lambda i: dict_cnt_classes_near[i])
-
-print(k_nn_kd_tree(test_dot, k_near_dots, obj_param, obj_classes, cos_dist))
